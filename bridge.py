@@ -23,9 +23,12 @@ def wait_for_java():
         if s.connect_ex(('127.0.0.1', JAVA_PORT)) == 0:
             print("[OK] Java 戰情中心已在背景待命。")
             return
-    full_cmd = f'start "Java_SMC_Tactical" cmd /k "{JAVA_START_CMD}"'
+    import shlex
+    cmd_list = shlex.split(JAVA_START_CMD, posix=False)
+    # Remove quotes from the executable path if they were kept by posix=False
+    cmd_list = [arg.strip('"') for arg in cmd_list]
     print("[*] 正在自動喚醒 Java 伺服器...")
-    subprocess.Popen(full_cmd, cwd=JAVA_PROJECT_DIR, shell=True)
+    subprocess.Popen(cmd_list, cwd=JAVA_PROJECT_DIR, creationflags=subprocess.CREATE_NEW_CONSOLE)
     while True:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             if s.connect_ex(('127.0.0.1', JAVA_PORT)) == 0:
