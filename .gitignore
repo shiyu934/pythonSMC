@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+benchmark*.py
+test_benchmark*.py
+*.db

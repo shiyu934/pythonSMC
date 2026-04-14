@@ -59,39 +59,48 @@ def data_fetcher_thread():
             agents_list = []
             smc_set = False
 
+            try:
+                # Pre-build UNION ALL query in chunks to avoid SQLite compound select limits and N+1 problem
+                CHUNK_SIZE = 50
+                rows_map = {}
+                for chunk_start in range(0, NUM_AGENTS, CHUNK_SIZE):
+                    chunk_end = min(chunk_start + CHUNK_SIZE, NUM_AGENTS)
+                    query_parts = []
+                    args = []
+                    for i in range(chunk_start, chunk_end):
+                        query_parts.append(f"SELECT * FROM (SELECT ? AS q_agent_id, action, reward, pnl, cur_pnl, vah, val FROM experiences WHERE agent_id = ? ORDER BY id DESC LIMIT 1)")
+                        aid = str(i)
+                        args.extend([aid, aid])
+
+                    if query_parts:
+                        query = " UNION ALL ".join(query_parts)
+                        rows = conn.execute(query, args).fetchall()
+                        for r in rows:
+                            rows_map[r[0]] = r[1:]
+            except Exception as e:
+                print(f"[!] DB Error during bulk fetch: {e}")
+                rows_map = {}
+
             for i in range(NUM_AGENTS):
                 aid = str(i)
-                try:
-                    row = conn.execute("""
-                        SELECT action, reward, pnl, cur_pnl, vah, val
-                        FROM experiences
-                        WHERE agent_id = ?
-                        ORDER BY id DESC
-                        LIMIT 1
-                    """, (aid,)).fetchone()
+                row = rows_map.get(aid)
 
-                    if row:
-                        action, reward, pnl, cur_pnl, vah, val = row
-                        agents_list.append({
-                            "id": i,
-                            "action": int(action or 0),
-                            "score": float(reward or 0.0),
-                            "cur_pnl": float(cur_pnl or 0.0),
-                            "total_pnl": float(pnl or 0.0),
-                        })
-                        if not smc_set:
-                            market_data["smc"] = {
-                                "vah": float(vah or 0),
-                                "val": float(val or 0)
-                            }
-                            smc_set = True
-                    else:
-                        agents_list.append({
-                            "id": i, "action": 0,
-                            "score": 0.0, "cur_pnl": 0.0, "total_pnl": 0.0
-                        })
-
-                except Exception:
+                if row:
+                    action, reward, pnl, cur_pnl, vah, val = row
+                    agents_list.append({
+                        "id": i,
+                        "action": int(action or 0),
+                        "score": float(reward or 0.0),
+                        "cur_pnl": float(cur_pnl or 0.0),
+                        "total_pnl": float(pnl or 0.0),
+                    })
+                    if not smc_set:
+                        market_data["smc"] = {
+                            "vah": float(vah or 0),
+                            "val": float(val or 0)
+                        }
+                        smc_set = True
+                else:
                     agents_list.append({
                         "id": i, "action": 0,
                         "score": 0.0, "cur_pnl": 0.0, "total_pnl": 0.0
