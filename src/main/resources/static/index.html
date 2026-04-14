@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>15D 軍團戰報 - SMC 儀表板</title>
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1.5.1/dist/sockjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+    <script src="/lightweight-charts.js"></script>
+    <style>
+        body { background: #0e1117; color: white; font-family: 'Segoe UI', Tahoma, sans-serif; padding: 20px; margin: 0; }
+        .card { background: #1e2130; padding: 20px; border-radius: 12px; border: 1px solid #333; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); }
+        .header-flex { display: flex; justify-content: space-between; align-items: center; }
+        #chart-container { width: 100%; height: 500px; margin-top: 15px; border-radius: 8px; background: #131722; overflow: hidden; border: 1px solid #2d314d; }
+        .tf-btn { background: #334155; color: white; border: 1px solid #475569; padding: 8px 18px; border-radius: 6px; cursor: pointer; transition: 0.2s; margin-right: 8px; font-size: 14px; }
+        .tf-btn.active { background: #f7931a; border-color: #f7931a; font-weight: bold; box-shadow: 0 0 10px rgba(247,147,26,0.4); }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 15px; }
+        th { text-align: left; padding: 15px; border-bottom: 2px solid #334155; color: #8892b0; }
+        td { padding: 15px; border-bottom: 1px solid #2d314d; }
+        .pnl-pos { color: #00ff88 !important; font-weight: bold; }
+        .pnl-neg { color: #ff4444 !important; font-weight: bold; }
+        .agent-row:hover { background: #25293d; }
+        #btc-price { font-size: 48px; color: #f7931a; margin: 0; font-family: 'Courier New', Courier, monospace; }
+        #ws-status { font-size: 12px; margin-top: 6px; color: #8892b0; }
+        #kline-status { font-size: 11px; color: #475569; margin-top: 4px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="header-flex">
+            <div>
+                <h1 style="margin:0; color:#f0f2f6;">BTC 15-Dimensional Army</h1>
+                <p style="margin:10px 0;">SMC: <span id="smc-zone" style="color:#00bcd4;font-weight:bold;">-- / --</span></p>
+                <div class="tf-group">
+                    <button onclick="changeTF('1m')"  id="btn-1m"  class="tf-btn active">1分K</button>
+                    <button onclick="changeTF('3m')"  id="btn-3m"  class="tf-btn">3分K</button>
+                    <button onclick="changeTF('5m')"  id="btn-5m"  class="tf-btn">5分K</button>
+                    <button onclick="changeTF('15m')" id="btn-15m" class="tf-btn">15分K</button>
+                </div>
+                <div id="ws-status">⚪ 連線中...</div>
+                <div id="kline-status">K線: 初始化中...</div>
+            </div>
+            <div style="text-align:right;">
+                <h2 id="btc-price">$ --,---</h2>
+            </div>
+        </div>
+        <div id="chart-container"></div>
+    </div>
+
+    <div class="card">
+        <h3 style="color:#f0f2f6;">戰士實時狀態 (16-Agent)</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>戰士</th><th>動作</th><th>Score</th><th>當前 PnL</th><th>生涯 PnL</th>
+                </tr>
+            </thead>
+            <tbody id="agent-list"></tbody>
+        </table>
+    </div>
+
+    <script>
+    // ================================================================
+    // 全域狀態
+    // ================================================================
+    const S = {
+        tfCache:      { '1m': [], '3m': [], '5m': [], '15m': [] },
+        currentTF:    '1m',
+        chart:        null,
+        candles:      null,   // candleSeries
+        vahLine:      null,
+        valLine:      null,
+        klineTimer:   null,   // 定時更新 K 線的 interval
+        priceTimer:   null    // 定時更新即時價格的 interval
+    };
+
+    const ACTION_MAP = { 0: '💤 觀望', 1: '🟢 做多', 2: '🔴 做空' };
+
+    // ================================================================
+    // 工具函數
+    // ================================================================
+    function setWsStatus(text, color) {
+        const el = document.getElementById('ws-status');
+        if (el) { el.innerText = text; el.style.color = color; }
+    }
+
+    function setKlineStatus(text) {
+        const el = document.getElementById('kline-status');
+        if (el) el.innerText = 'K線: ' + text;
+    }
+
+    // ================================================================
+    // K 線 — 直接從 Binance REST API 拉（不依賴 bridge/Java）
+    // 這樣網頁刷新、bridge 重啟、Java 重啟都不影響 K 線顯示
+    // ================================================================
+    const BINANCE_API = 'https://api.binance.com/api/v3/klines';
+    const TF_MAP = { '1m': '1m', '3m': '3m', '5m': '5m', '15m': '15m' };
+
+    async function fetchKlines(tf, limit = 400) {
+        try {
+            const url = `${BINANCE_API}?symbol=BTCUSDT&interval=${TF_MAP[tf]}&limit=${limit}`;
+            const res  = await fetch(url);
+            const data = await res.json();
+            if (!Array.isArray(data)) return [];
+
+            const parsed = data.map(d => ({
+                time:  Math.floor(d[0] / 1000),   // 毫秒轉秒
+                open:  parseFloat(d[1]),
+                high:  parseFloat(d[2]),
+                low:   parseFloat(d[3]),
+                close: parseFloat(d[4])
+            })).filter(d =>
+                d.time > 0 && d.open > 0 && d.close > 0 && d.high >= d.low
+            ).sort((a, b) => a.time - b.time);
+
+            // 去重
+            const seen = new Set();
+            return parsed.filter(d => {
+                if (seen.has(d.time)) return false;
+                seen.add(d.time);
+                return true;
+            });
+        } catch(e) {
+            console.error('fetchKlines error:', e);
+            return [];
+        }
+    }
+
+    async function initAllKlines() {
+        setKlineStatus('載入中...');
+        for (const tf of ['1m', '3m', '5m', '15m']) {
+            const data = await fetchKlines(tf, 400);
+            S.tfCache[tf] = data;
+        }
+        changeTF(S.currentTF);
+        setKlineStatus('已載入');
+    }
+
+    // 每 10 秒只更新當前顯示的時間框最新 3 根 K 棒（避免頻繁請求）
+    async function refreshCurrentTF() {
+        const tf   = S.currentTF;
+        const data = await fetchKlines(tf, 3);
+        if (!data.length) return;
+
+        const cache = S.tfCache[tf];
+        let updated = false;
+
+        data.forEach(incoming => {
+            if (!cache.length) return;
+            const last = cache[cache.length - 1];
+
+            if (incoming.time === last.time) {
+                // 更新最後一根
+                last.open  = incoming.open;
+                last.high  = Math.max(last.high, incoming.high);
+                last.low   = Math.min(last.low,  incoming.low);
+                last.close = incoming.close;
+                updated = true;
+            } else if (incoming.time > last.time) {
+                // 新 K 棒
+                cache.push(incoming);
+                updated = true;
+            }
+        });
+
+        if (updated && S.candles) {
+            // 修正：不要用 forEach 更新多根，只更新最後一根最保險
+            const latestCandle = cache[cache.length - 1];
+            
+            // 檢查時間戳是否正確（確保不是物件）
+            const lastDataOnChart = S.candles.data().at(-1);
+            const lastTime = lastDataOnChart ? lastDataOnChart.time : 0;
+
+            if (latestCandle.time >= lastTime) {
+                S.candles.update(latestCandle);
+            } else {
+                // 如果真的需要更新整段歷史（例如切換時區），請用 setData
+                S.candles.setData(cache);
+            }
+        }
+    }
+
+    // ================================================================
+    // 即時價格 — 也直接從 Binance 拉（ticker）
+    // ================================================================
+    async function fetchLivePrice() {
+        try {
+            const res  = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT');
+            const data = await res.json();
+            const price = parseFloat(data.price);
+            if (!isNaN(price) && price > 0) {
+                document.getElementById('btc-price').innerText =
+                    `$ ${price.toLocaleString(undefined, { minimumFractionDigits: 1 })}`;
+
+                // 同時更新所有 tf 最後一根的收盤價（讓 K 棒即時跳動）
+                Object.keys(S.tfCache).forEach(tf => {
+                    const cache = S.tfCache[tf];
+                    if (!cache.length) return;
+                    const last = cache[cache.length - 1];
+                    last.close = price;
+                    if (price > last.high) last.high = price;
+                    if (price < last.low)  last.low  = price;
+                    if (tf === S.currentTF && S.candles) {
+                        S.candles.update(last);
+                    }
+                });
+            }
+        } catch(e) {}
+    }
+
+    // ================================================================
+    // 切換時間框
+    // ================================================================
+    function changeTF(tf) {
+        S.currentTF = tf;
+        document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+        const btn = document.getElementById(`btn-${tf}`);
+        if (btn) btn.classList.add('active');
+
+        const data = S.tfCache[tf];
+        if (!data || !data.length) {
+            setKlineStatus(`${tf} 無資料，重新載入...`);
+            fetchKlines(tf, 400).then(d => {
+                S.tfCache[tf] = d;
+                if (d.length && S.candles) {
+                    S.candles.setData(d);
+                    S.chart.timeScale().fitContent();
+                    setKlineStatus(`${tf} 已載入 ${d.length} 根`);
+                }
+            });
+            return;
+        }
+        if (!S.candles) return;
+        try {
+            S.candles.setData(data);
+            S.chart.timeScale().fitContent();
+            setKlineStatus(`${tf} ${data.length} 根`);
+        } catch(e) {
+            console.error('setData error:', e.message);
+        }
+    }
+
+    // ================================================================
+    // SMC 水平線
+    // ================================================================
+    function updateSMCLines(vah, val) {
+        if (!S.candles || isNaN(vah) || isNaN(val)) return;
+        if (S.vahLine) S.candles.removePriceLine(S.vahLine);
+        if (S.valLine) S.candles.removePriceLine(S.valLine);
+        S.vahLine = S.candles.createPriceLine({ price: vah, color: '#ef5350', lineWidth: 2, title: 'VAH' });
+        S.valLine = S.candles.createPriceLine({ price: val, color: '#26a69a', lineWidth: 2, title: 'VAL' });
+        document.getElementById('smc-zone').innerText = `${vah.toFixed(1)} / ${val.toFixed(1)}`;
+    }
+
+    // ================================================================
+    // 戰士表格更新
+    // ================================================================
+    function updateAgentRow(a) {
+        const row = document.getElementById(`a-${a.id}`);
+        if (!row) return;
+        const sVal = parseFloat(a.score     ?? 0);
+        const cVal = parseFloat(a.cur_pnl   ?? 0);
+        const tVal = parseFloat(a.total_pnl ?? 0);
+
+        row.querySelector('.act').innerText = ACTION_MAP[a.action] ?? '💤 觀望';
+
+        const scoEl = row.querySelector('.sco');
+        if (scoEl) {
+            scoEl.innerText    = sVal.toFixed(3);
+            scoEl.style.color  = sVal > 0.001 ? '#00ff88' : (sVal < -0.001 ? '#ff4444' : '#8892b0');
+        }
+        const curEl = row.querySelector('.cur');
+        if (curEl) {
+            curEl.innerText   = cVal.toFixed(3) + '%';
+            curEl.className   = 'cur ' + (cVal > 0.001 ? 'pnl-pos' : cVal < -0.001 ? 'pnl-neg' : '');
+        }
+        const totEl = row.querySelector('.tot');
+        if (totEl) {
+            totEl.innerText   = tVal.toFixed(2) + '%';
+            totEl.className   = 'tot ' + (tVal >= 0.001 ? 'pnl-pos' : tVal < -0.001 ? 'pnl-neg' : '');
+        }
+    }
+
+    // ================================================================
+    // WebSocket — 只負責接收 agents 狀態和 SMC
+    // K 線和價格改由 Binance REST 直接處理
+    // ================================================================
+    function startWebSocket() {
+        setWsStatus('⚪ 連線中...', '#8892b0');
+        const socket      = new SockJS('/ws-trading');
+        const stompClient = Stomp.over(socket);
+        stompClient.debug = null;
+
+        stompClient.connect({}, function() {
+            setWsStatus('🟢 WS 已連線', '#00ff88');
+
+            stompClient.subscribe('/topic/tactical', function(res) {
+                try {
+                    const payload = JSON.parse(res.body);
+
+                    // SMC 水平線更新
+                    if (payload.smc && payload.smc.vah) {
+                        updateSMCLines(parseFloat(payload.smc.vah), parseFloat(payload.smc.val));
+                    }
+
+                    // 戰士狀態更新
+                    if (Array.isArray(payload.agents) && payload.agents.length > 0) {
+                        payload.agents.forEach(a => updateAgentRow(a));
+                    }
+
+                } catch(e) {
+                    console.error('WS parse error:', e);
+                }
+            });
+
+        }, function() {
+            setWsStatus('🔴 WS 斷線，重連...', '#ff4444');
+            setTimeout(startWebSocket, 3000);
+        });
+    }
+
+    // ================================================================
+    // 初始化
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', () => {
+        // 建立戰士表格
+        const tbody = document.getElementById('agent-list');
+        let rows = '';
+        for (let i = 0; i < 32; i++) {
+            rows += `<tr id="a-${i}" class="agent-row">
+                <td><b>A${String(i).padStart(2,'0')}</b></td>
+                <td class="act">⏳ 同步中</td>
+                <td class="sco">0.000</td>
+                <td class="cur">0.000%</td>
+                <td class="tot">0.00%</td>
+            </tr>`;
+        }
+        tbody.innerHTML = rows;
+
+        // 建立圖表
+        const container = document.getElementById('chart-container');
+        if (typeof LightweightCharts === 'undefined') {
+            alert('LightweightCharts 載入失敗，請確認 /lightweight-charts.js 存在');
+            return;
+        }
+
+        S.chart = LightweightCharts.createChart(container, {
+            width:  container.clientWidth,
+            height: 500,
+            layout: { background: { type: 'solid', color: '#131722' }, textColor: '#d1d4dc' },
+            grid:   { vertLines: { color: '#1f2937' }, horzLines: { color: '#1f2937' } },
+            timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#2d314d' },
+            rightPriceScale: { borderColor: '#2d314d' }
+        });
+
+        S.candles = S.chart.addCandlestickSeries({
+            upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
+            wickUpColor: '#26a69a', wickDownColor: '#ef5350'
+        });
+
+        window.addEventListener('resize', () => {
+            S.chart.applyOptions({ width: container.clientWidth });
+        });
+
+        // 啟動三條獨立管道
+        // 1. 歷史 K 線一次性載入
+        initAllKlines();
+
+        // 2. 即時價格每 1 秒更新（讓 K 棒跳動）
+        S.priceTimer = setInterval(fetchLivePrice, 1000);
+
+        // 3. K 棒結構每 10 秒更新一次（偵測新 K 棒、更新 OHLC）
+        S.klineTimer = setInterval(refreshCurrentTF, 10000);
+
+        // 4. WebSocket 只接 agents + SMC
+        startWebSocket();
+    });
+    </script>
+</body>
+</html>

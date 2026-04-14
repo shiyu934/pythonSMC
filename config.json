@@ -1,0 +1,8 @@
+{
+    "mdd_limit": -5.0,
+    "dead_threshold": -10.0,
+    "cooldown": 300,
+    "leverage": 10,
+    "evolution_prob": 0.8,
+    "batch_size": 16
+}
