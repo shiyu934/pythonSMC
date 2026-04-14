@@ -1,7 +1,6 @@
 import torch
 import json
 import time
-import numpy as np
 from config import (
     LEVERAGE, FEE_LEVERAGED,
     FEE_OPEN_LEVERAGED, FEE_CLOSE_LEVERAGED,
