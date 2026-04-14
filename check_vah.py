@@ -303,21 +303,25 @@ def analyze_action_sequence(df: pd.DataFrame) -> dict:
     for aid, g in df.groupby("agent_id"):
         g = g.sort_values("id")
         acts = g["action"].values
-        for i in range(1, len(acts)):
-            if acts[i-1] != 0 and acts[i] == 0:
-                total_trades += 1
-                # 找上一個開倉點
-                prev_open = None
-                for j in range(i-1, -1, -1):
-                    if acts[j] == 0:
-                        prev_open = j + 1
-                        break
-                if prev_open is not None and (i - prev_open) == 1:
-                    snap_close += 1
+
+        if len(acts) < 2:
+            continue
+
+        is_zero = (acts == 0)
+        is_nonzero = ~is_zero
+
+        # acts[i-1] != 0 and acts[i] == 0
+        closes = is_nonzero[:-1] & is_zero[1:]
+        total_trades += closes.sum()
+
+        if len(acts) >= 3:
+            # acts[i-2] == 0 and acts[i-1] != 0 and acts[i] == 0
+            snap_closes = is_zero[:-2] & is_nonzero[1:-1] & is_zero[2:]
+            snap_close += snap_closes.sum()
 
     return {
-        "snap_close_pct": snap_close / (total_trades + 1e-9) * 100,
-        "total_trades":   total_trades,
+        "snap_close_pct": float(snap_close / (total_trades + 1e-9) * 100),
+        "total_trades":   int(total_trades),
     }
 
 
