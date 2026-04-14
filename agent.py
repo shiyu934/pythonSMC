@@ -68,7 +68,7 @@ class TCNQNetwork(nn.Module):
     - 多尺度感受野：同時看短期和中期模式
     """
     def __init__(self, state_dim=STATE_DIM, stack_size=STACK_SIZE,
-                 action_dim=3, hidden=256, dropout=0.1):
+                 action_dim=3, hidden=256, dropout=0.2)；
         super().__init__()
         self.state_dim  = state_dim
         self.stack_size = stack_size
