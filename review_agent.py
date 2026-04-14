@@ -196,50 +196,38 @@ class ReviewAgent:
             n_bad   = batch_size - n_good
             n_short = int(batch_size * 0.3)   # 強制 30% 做空樣本
 
-            # 透過 UNION ALL 將三個查詢合併，減少資料庫往返次數
-            combined_rows = conn.execute("""
-                SELECT * FROM (
-                    SELECT state, action, reward, next_state, 'good' as type
-                    FROM experiences
-                    WHERE action != 0
-                      AND next_state IS NOT NULL
-                      AND reward > ?
-                    ORDER BY reward DESC
-                    LIMIT ?
-                )
-                UNION ALL
-                SELECT * FROM (
-                    SELECT state, action, reward, next_state, 'bad' as type
-                    FROM experiences
-                    WHERE action != 0
-                      AND next_state IS NOT NULL
-                      AND reward < ?
-                    ORDER BY reward ASC
-                    LIMIT ?
-                )
-                UNION ALL
-                SELECT * FROM (
-                    SELECT state, action, reward, next_state, 'short' as type
-                    FROM experiences
-                    WHERE action = 2
-                      AND next_state IS NOT NULL
-                      AND reward > 0
-                    ORDER BY reward DESC
-                    LIMIT ?
-                )
-            """, (min_reward_good, n_good * 5, max_reward_bad, n_bad * 5, n_short * 5)).fetchall()
+            # 高品質獲利樣本（reward > 1.0）
+            good_rows = conn.execute("""
+                SELECT state, action, reward, next_state
+                FROM experiences
+                WHERE action != 0
+                  AND next_state IS NOT NULL
+                  AND reward > ?
+                ORDER BY reward DESC
+                LIMIT ?
+            """, (min_reward_good, n_good * 5)).fetchall()
 
-            good_rows = []
-            bad_rows = []
-            short_rows = []
+            # 典型失敗樣本（reward < -1.0）
+            bad_rows = conn.execute("""
+                SELECT state, action, reward, next_state
+                FROM experiences
+                WHERE action != 0
+                  AND next_state IS NOT NULL
+                  AND reward < ?
+                ORDER BY reward ASC
+                LIMIT ?
+            """, (max_reward_bad, n_bad * 5)).fetchall()
 
-            for r in combined_rows:
-                if r[4] == 'good':
-                    good_rows.append(r[:4])
-                elif r[4] == 'bad':
-                    bad_rows.append(r[:4])
-                elif r[4] == 'short':
-                    short_rows.append(r[:4])
+            # 強制做空獲利樣本
+            short_rows = conn.execute("""
+                SELECT state, action, reward, next_state
+                FROM experiences
+                WHERE action = 2
+                  AND next_state IS NOT NULL
+                  AND reward > 0
+                ORDER BY reward DESC
+                LIMIT ?
+            """, (n_short * 5,)).fetchall()
 
         finally:
             conn.close()
