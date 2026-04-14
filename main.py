@@ -98,7 +98,7 @@ async def main_loop():
         if not await asyncio.wait_for(engine.connect(), timeout=20.0):
             print("[🚨] 數據抓取失敗。")
             return
-    except:
+    except Exception:
         print("[🚨] 連線超時！")
         return
 
@@ -454,6 +454,6 @@ if __name__ == "__main__":
         if GLOBAL_WARRIORS:
             for a in GLOBAL_WARRIORS:
                 try: a.save_brain()
-                except: pass
+                except Exception: pass
         loop.close()
         print("[🌙] 系統已釋放。")

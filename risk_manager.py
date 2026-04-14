@@ -33,7 +33,7 @@ class RiskManager:
         try:
             with open(self.config_path, "r") as f:
                 self.config = json.load(f)
-        except:
+        except Exception:
             self.config = {"dead_threshold": DEAD_THRESHOLD}
 
     def update_pnl(self, a_id, action, price_now, arena, smc_info=None):

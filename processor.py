@@ -430,7 +430,7 @@ class DataProcessor:
             # 【修正】移除 Non-Broken，VAH/VAL 固定不跟著現價移動
             # 突破時 p_pos > 1 或 < 0，AI 才能感知突破訊號
             return vah, val
-        except:
+        except Exception:
             return 0.0, 0.0
 
     def _navigate_levels(self, price, vah, val, abs_low, choch) -> Dict:
