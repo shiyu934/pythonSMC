@@ -15,7 +15,6 @@ os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 gc.collect()
 
-import torch
 import numpy as np
 from config import STATE_DIM, STACK_SIZE, TOTAL_DIM, NUM_AGENTS, LEVERAGE
 from data_engine import DataEngine
