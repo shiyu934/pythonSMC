@@ -23,7 +23,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from collections import defaultdict
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 import os
 import sys
 
