@@ -98,13 +98,11 @@ st.sidebar.write(f"系統同步: {datetime.now().strftime('%H:%M:%S')}")
 # --- 5. 戰士排行榜 (總報酬) ---
 st.title("🚀 BTC 15-Dimensional Army Dashboard")
 if not df_all.empty:
-    leaderboard = []
-    for i in range(16):
-        a_df = df_all[df_all['agent_id'] == str(i)]
-        tot = a_df['pnl'].iloc[0] if not a_df.empty else 0.0
-        leaderboard.append({'Agent': f"A{i}", 'PnL': tot})
-
-    df_rank = pd.DataFrame(leaderboard).sort_values(by='PnL', ascending=False)
+    agents = [str(i) for i in range(16)]
+    first_pnl = df_all.groupby('agent_id')['pnl'].first().reindex(agents, fill_value=0.0)
+    df_rank = first_pnl.reset_index().rename(columns={'agent_id': 'Agent', 'pnl': 'PnL'})
+    df_rank['Agent'] = 'A' + df_rank['Agent']
+    df_rank = df_rank.sort_values(by='PnL', ascending=False)
     st.plotly_chart(px.bar(df_rank, x='Agent', y='PnL', color='PnL',
                            color_continuous_scale='RdYlGn', template="plotly_dark", height=220),
                     use_container_width=True)
