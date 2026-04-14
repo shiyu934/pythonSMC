@@ -56,10 +56,10 @@ class TCNQNetwork(nn.Module):
     時序卷積網路 + Dueling DQN
 
     架構：
-    輸入 (batch, TOTAL_DIM) -> reshape -> (batch, STACK_SIZE, STATE_DIM)
-    -> 轉置 -> (batch, STATE_DIM, STACK_SIZE) 當作 (batch, features, seq)
-    -> 四層 TCN（dilation 1,2,4,8）
-    -> 取最後一幀 (last frame) 輸出
+    輸入 (batch, 264) -> reshape -> (batch, 22, 12)
+    -> 轉置 -> (batch, 22, 12) 當作 (batch, features, seq)
+    -> 三層 TCN（dilation 1,2,4，感受野涵蓋全部 12 幀）
+    -> 全局平均池化
     -> Dueling 分流輸出
 
     對比 LSTM：
@@ -68,7 +68,7 @@ class TCNQNetwork(nn.Module):
     - 多尺度感受野：同時看短期和中期模式
     """
     def __init__(self, state_dim=STATE_DIM, stack_size=STACK_SIZE,
-                 action_dim=3, hidden=256, dropout=0.2)；
+                 action_dim=3, hidden=256, dropout=0.2):
         super().__init__()
         self.state_dim  = state_dim
         self.stack_size = stack_size
@@ -95,8 +95,7 @@ class TCNQNetwork(nn.Module):
         x = x.transpose(1, 2)   # (batch, features, seq)
 
         out = self.tcn(x)        # (batch, hidden*2, seq)
-        # 取最後一幀 (最新時間點的特徵)，取代原本的 out.mean(dim=2) 全局平均池化
-        feat = out[:, :, -1]     # (batch, hidden*2)
+        feat = out.mean(dim=2)   # 全局平均池化 (batch, hidden*2)
 
         v = self.value_stream(feat)
         a = self.advantage_stream(feat)
@@ -114,9 +113,9 @@ class TradingAgent:
         self.action_dim = action_dim
         self.use_lstm   = use_lstm  # 保留欄位，不再影響架構選擇
 
-        self.gamma               = 0.95
+        self.gamma               = 0.98
         self.learn_step_counter  = 0
-        self.replace_target_iter = 1000
+        self.replace_target_iter = 200
 
         # 全部統一用 TCN，告別 DQN/LSTM 分裂問題
         self.model        = TCNQNetwork(state_dim, stack_size, action_dim).to(device)
@@ -215,6 +214,23 @@ class TradingAgent:
                 if action == 2 and not h4_is_bull:
                     score += 1
 
+                # ── H4 位置（0.25~0.75 最佳）─────────────────────────
+                # 太高不追多，太低不追空
+                if action == 1 and h4_pos < 0.75:
+                    score += 1
+                    if h4_pos < 0.5:
+                        score += 1 # 低檔做多額外加分
+                if action == 2 and h4_pos > 0.25:
+                    score += 1
+                    if h4_pos > 0.5:
+                        score += 1 # 高檔做空額外加分
+
+                # 極端位置嚴格過濾
+                if action == 1 and h4_pos > 0.9:
+                    score -= 2 # 頂部不追多
+                if action == 2 and h4_pos < 0.1:
+                    score -= 2 # 底部不追空
+
                 # ── KZ 時段（最重要，不在時段大幅扣分）─────────────────
                 if is_ny > 0.4:
                     score += 2
@@ -261,10 +277,9 @@ class TradingAgent:
                     score -= 1   # 強烈賣壓掛單，扣分但不封鎖
 
                 # ── 開倉門檻 ─────────────────────────────────────────
-                # 診斷：agent 幾乎不開單，降低門檻到 2 分
-                # 現在只有 H4+BOS 或 KZ+BOS 就能達到 2 分
-                # 讓 agent 能夠開倉，累積更多學習樣本
-                if score < 2:
+                # 診斷：加入了 H4_POS 的評分，平均得分會變高。
+                # 將門檻稍微提高到 3 分，保持開單品質的同時也能讓 Agent 順利進場。
+                if score < 3:
                     return 0
 
             return action
@@ -297,11 +312,7 @@ class TradingAgent:
             ).view(-1, 1)
 
             with torch.no_grad():
-                # Double DQN (DDQN) 實作
-                # 1. 用 online model 找出 next_state 中 Q 值最大的動作
-                best_next_actions = self.model(v_ns).argmax(1).view(-1, 1)
-                # 2. 用 target model 評估該動作的 Q 值，避免 Q 值高估
-                next_q = self.target_model(v_ns).gather(1, best_next_actions)
+                next_q   = self.target_model(v_ns).max(1)[0].view(-1, 1)
                 target_q = v_r + self.gamma * next_q
 
             current_q = self.model(v_s).gather(1, v_a)

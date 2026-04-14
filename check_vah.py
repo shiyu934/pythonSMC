@@ -179,73 +179,48 @@ def analyze_db_health(df: pd.DataFrame) -> dict:
 
 
 def analyze_per_agent(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return pd.DataFrame()
+    records = []
+    for aid, g in df.groupby("agent_id"):
+        trades  = g[g["action"] != 0]
+        holds   = g[g["action"] == 0]
+        pnl_vals = g["cur_pnl"].dropna()
 
-    def _agent_stats(g):
-        total = len(g)
-        actions = g["action"].values
-        cur_pnl = g["cur_pnl"].values
+        # 最終 PnL（最後一筆的累計）
+        final_pnl = g.sort_values("id")["pnl"].iloc[-1] if len(g) > 0 else 0
 
-        holds_cnt = (actions == 0).sum()
-        longs_cnt = (actions == 1).sum()
-        shorts_cnt = (actions == 2).sum()
-        trades_cnt = longs_cnt + shorts_cnt
+        # 勝率
+        wins  = (pnl_vals > 0).sum()
+        total_pnl = len(pnl_vals)
+        win_rate = wins / (total_pnl + 1e-9) * 100
 
-        final_pnl = g["pnl"].values[-1] if total > 0 else 0
+        # 平均持倉長度（連續相同 action 的長度）
+        actions = g.sort_values("id")["action"].values
+        hold_lens = []
+        cur_len = 1
+        for i in range(1, len(actions)):
+            if actions[i] == actions[i-1] and actions[i] != 0:
+                cur_len += 1
+            else:
+                if cur_len > 1:
+                    hold_lens.append(cur_len)
+                cur_len = 1
+        avg_hold = np.mean(hold_lens) if hold_lens else 0
 
-        valid_pnl = cur_pnl[~np.isnan(cur_pnl)]
-        if len(valid_pnl) > 0:
-            wins = (valid_pnl > 0).sum()
-            win_rate = wins / (len(valid_pnl) + 1e-9) * 100
-        else:
-            win_rate = 0.0
-
-        if total > 1:
-            changes = actions[1:] != actions[:-1]
-            change_idx = np.flatnonzero(changes) + 1
-
-            starts = np.empty(len(change_idx) + 1, dtype=int)
-            starts[0] = 0
-            starts[1:] = change_idx
-
-            ends = np.empty(len(change_idx) + 1, dtype=int)
-            ends[:-1] = change_idx
-            ends[-1] = total
-
-            lengths = ends - starts
-            block_actions = actions[starts]
-
-            keep = (block_actions != 0) & (lengths > 1)
-            if len(keep) > 0:
-                keep[-1] = False
-
-            valid_lengths = lengths[keep]
-            avg_hold = np.mean(valid_lengths) if len(valid_lengths) > 0 else 0
-        else:
-            avg_hold = 0
-
-        return {
-            "agent": g["agent_id"].values[0],
-            "total_records": total,
-            "final_pnl": round(final_pnl, 2),
-            "win_rate": round(win_rate, 1),
+        records.append({
+            "agent":        aid,
+            "total_records": len(g),
+            "final_pnl":    round(final_pnl, 2),
+            "win_rate":     round(win_rate, 1),
             "avg_hold_bars": round(avg_hold, 1),
-            "trade_count": trades_cnt,
-            "hold_pct": round(holds_cnt / total * 100, 1),
-            "long_pct": round(longs_cnt / total * 100, 1),
-            "short_pct": round(shorts_cnt / total * 100, 1),
-            "reward_mean": round(g["reward"].mean(), 3),
-            "pnl_std": round(np.nanstd(cur_pnl, ddof=1) if len(valid_pnl)>1 else 0.0, 2)
-        }
+            "trade_count":  len(trades),
+            "hold_pct":     round(len(holds) / len(g) * 100, 1),
+            "long_pct":     round((g["action"] == 1).sum() / len(g) * 100, 1),
+            "short_pct":    round((g["action"] == 2).sum() / len(g) * 100, 1),
+            "reward_mean":  round(g["reward"].mean(), 3),
+            "pnl_std":      round(g["cur_pnl"].std(), 2),
+        })
 
-    df_sorted = df.sort_values("id")
-
-    records = [_agent_stats(g) for aid, g in df_sorted.groupby("agent_id", sort=False)]
-
-    res = pd.DataFrame(records)
-    cols = ["agent", "total_records", "final_pnl", "win_rate", "avg_hold_bars", "trade_count", "hold_pct", "long_pct", "short_pct", "reward_mean", "pnl_std"]
-    return res[cols].sort_values("agent")
+    return pd.DataFrame(records).sort_values("agent")
 
 
 def analyze_feature_importance(states: np.ndarray, df_sample: pd.DataFrame) -> pd.DataFrame:

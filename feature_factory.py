@@ -316,43 +316,44 @@ class FeatureFactory:
             ob_bull = ob_bear = 0.0
             search_range = min(80, len(df) - 12)
 
-            # 提取 NumPy 陣列以加速運算
-            if search_range >= 2:
-                c_arr = df["close"].values[-search_range:]
-                o_arr = df["open"].values[-search_range:]
-                h_arr = df["high"].values[-search_range:]
-                l_arr = df["low"].values[-search_range:]
-
-                bull_found = False
-                bear_found = False
-
-                for j in range(2, search_range):
-                    if bull_found and bear_found:
+            # 多方 OB：找最近的空頭K棒，且之後 10 根內有突破其最高點
+            for j in range(2, search_range):
+                c_j = float(df["close"].iloc[-j])
+                o_j = float(df["open"].iloc[-j])
+                h_j = float(df["high"].iloc[-j])
+                if c_j >= o_j:   # 不是空頭K棒，跳過
+                    continue
+                # 確認後面 10 根內有沒有突破這根的最高點
+                confirmed = False
+                for k in range(1, min(10, j)):
+                    c_k = float(df["close"].iloc[-(j-k)])
+                    if c_k > h_j:
+                        confirmed = True
                         break
+                if confirmed:
+                    ob_mid = (o_j + c_j) / 2
+                    dist   = (last_c - ob_mid) / (ob_mid + 1e-9) * 100
+                    ob_bull = float(np.clip(dist, -10, 10))
+                    break   # 找到最近的有效 OB 就停
 
-                    idx = search_range - j
-                    c_j = c_arr[idx]
-                    o_j = o_arr[idx]
-
-                    # 多方 OB：找最近的空頭K棒，且之後 10 根內有突破其最高點
-                    if not bull_found and c_j < o_j:
-                        h_j = h_arr[idx]
-                        limit = min(10, j)
-                        if np.any(c_arr[idx+1:idx+limit] > h_j):
-                            ob_mid = (o_j + c_j) / 2
-                            dist = (last_c - ob_mid) / (ob_mid + 1e-9) * 100
-                            ob_bull = float(np.clip(dist, -10, 10))
-                            bull_found = True
-
-                    # 空方 OB：找最近的多頭K棒，且之後 10 根內有跌破其最低點
-                    if not bear_found and c_j > o_j:
-                        l_j = l_arr[idx]
-                        limit = min(10, j)
-                        if np.any(c_arr[idx+1:idx+limit] < l_j):
-                            ob_mid = (o_j + c_j) / 2
-                            dist = (last_c - ob_mid) / (ob_mid + 1e-9) * 100
-                            ob_bear = float(np.clip(dist, -10, 10))
-                            bear_found = True
+            # 空方 OB：找最近的多頭K棒，且之後 10 根內有跌破其最低點
+            for j in range(2, search_range):
+                c_j = float(df["close"].iloc[-j])
+                o_j = float(df["open"].iloc[-j])
+                l_j = float(df["low"].iloc[-j])
+                if c_j <= o_j:   # 不是多頭K棒，跳過
+                    continue
+                confirmed = False
+                for k in range(1, min(10, j)):
+                    c_k = float(df["close"].iloc[-(j-k)])
+                    if c_k < l_j:
+                        confirmed = True
+                        break
+                if confirmed:
+                    ob_mid  = (o_j + c_j) / 2
+                    dist    = (last_c - ob_mid) / (ob_mid + 1e-9) * 100
+                    ob_bear = float(np.clip(dist, -10, 10))
+                    break
 
             # ── [15] 價格變化率 ────────────────────────────────────────
             p_chg = df["close"].pct_change().iloc[-1] * 10
