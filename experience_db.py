@@ -235,7 +235,7 @@ class ExperienceDB:
                               (symbol, timeframe, candle[0], candle[1], candle[2], candle[3], candle[4], candle[5],
                                dt_str))
             self.conn.commit()
-        except:
+        except Exception:
             pass
 
     def sample_high_quality(self, batch_size=32, target_dim=TOTAL_DIM):
