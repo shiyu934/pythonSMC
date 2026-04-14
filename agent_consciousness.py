@@ -19,7 +19,7 @@ agent_consciousness.py — Agent 自我意識系統
 
 import numpy as np
 from collections import deque
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple
 import time
 
 
