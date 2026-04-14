@@ -316,14 +316,8 @@ class PhysicEngine:
                                     # 完整快照：重建本地 order book
                                     local_bids.clear()
                                     local_asks.clear()
-                                    for entry in bids:
-                                        p, q = float(entry["price"]), float(entry["qty"])
-                                        if q > 0:
-                                            local_bids[p] = q
-                                    for entry in asks:
-                                        p, q = float(entry["price"]), float(entry["qty"])
-                                        if q > 0:
-                                            local_asks[p] = q
+                                    local_bids.update({float(e["price"]): q for e in bids if (q := float(e["qty"])) > 0})
+                                    local_asks.update({float(e["price"]): q for e in asks if (q := float(e["qty"])) > 0})
 
                                 elif msg_type == "update":
                                     # 增量更新：qty=0 刪除，否則更新
