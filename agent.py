@@ -159,7 +159,7 @@ class TradingAgent:
             bos       = float(latest_feat[F_BOS])      # 連續值：正=多方突破 負=空方突破
             h4_trend  = float(latest_feat[F_H4_TREND]) # H4 EMA 斜率
             h4_pos    = float(latest_feat[F_H4_POS])
-        except:
+        except Exception:
             pd_ratio = 0.5; is_sweep = 0.0; amd_phase = 1.0
             choch = 0.0; is_ny = 0.0; eq_hl = 0.0
             ob_bull = 0.0; ob_bear = 0.0; bos = 0.0
