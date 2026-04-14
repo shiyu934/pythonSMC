@@ -32,7 +32,7 @@ def fetch_live_price():
         exchange = get_binance_ticker()
         ticker = exchange.fetch_ticker('BTC/USDT')
         return float(ticker['last'])
-    except:
+    except Exception:
         return 0.0
 
 
@@ -47,7 +47,7 @@ def get_db_data(table="experiences", limit=500):
         df = pd.read_sql_query(query, conn)
         conn.close()
         return df
-    except:
+    except Exception:
         return pd.DataFrame()
 
 
