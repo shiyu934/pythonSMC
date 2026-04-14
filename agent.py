@@ -56,10 +56,10 @@ class TCNQNetwork(nn.Module):
     時序卷積網路 + Dueling DQN
 
     架構：
-    輸入 (batch, 264) -> reshape -> (batch, 22, 12)
-    -> 轉置 -> (batch, 22, 12) 當作 (batch, features, seq)
-    -> 三層 TCN（dilation 1,2,4，感受野涵蓋全部 12 幀）
-    -> 全局平均池化
+    輸入 (batch, TOTAL_DIM) -> reshape -> (batch, STACK_SIZE, STATE_DIM)
+    -> 轉置 -> (batch, STATE_DIM, STACK_SIZE) 當作 (batch, features, seq)
+    -> 四層 TCN（dilation 1,2,4,8）
+    -> 取最後一幀 (last frame) 輸出
     -> Dueling 分流輸出
 
     對比 LSTM：
@@ -68,7 +68,7 @@ class TCNQNetwork(nn.Module):
     - 多尺度感受野：同時看短期和中期模式
     """
     def __init__(self, state_dim=STATE_DIM, stack_size=STACK_SIZE,
-                 action_dim=3, hidden=128, dropout=0.2):
+                 action_dim=3, hidden=256, dropout=0.1):
         super().__init__()
         self.state_dim  = state_dim
         self.stack_size = stack_size
@@ -95,7 +95,8 @@ class TCNQNetwork(nn.Module):
         x = x.transpose(1, 2)   # (batch, features, seq)
 
         out = self.tcn(x)        # (batch, hidden*2, seq)
-        feat = out.mean(dim=2)   # 全局平均池化 (batch, hidden*2)
+        # 取最後一幀 (最新時間點的特徵)，取代原本的 out.mean(dim=2) 全局平均池化
+        feat = out[:, :, -1]     # (batch, hidden*2)
 
         v = self.value_stream(feat)
         a = self.advantage_stream(feat)
@@ -113,9 +114,9 @@ class TradingAgent:
         self.action_dim = action_dim
         self.use_lstm   = use_lstm  # 保留欄位，不再影響架構選擇
 
-        self.gamma               = 0.98
+        self.gamma               = 0.95
         self.learn_step_counter  = 0
-        self.replace_target_iter = 200
+        self.replace_target_iter = 1000
 
         # 全部統一用 TCN，告別 DQN/LSTM 分裂問題
         self.model        = TCNQNetwork(state_dim, stack_size, action_dim).to(device)
@@ -296,7 +297,11 @@ class TradingAgent:
             ).view(-1, 1)
 
             with torch.no_grad():
-                next_q   = self.target_model(v_ns).max(1)[0].view(-1, 1)
+                # Double DQN (DDQN) 實作
+                # 1. 用 online model 找出 next_state 中 Q 值最大的動作
+                best_next_actions = self.model(v_ns).argmax(1).view(-1, 1)
+                # 2. 用 target model 評估該動作的 Q 值，避免 Q 值高估
+                next_q = self.target_model(v_ns).gather(1, best_next_actions)
                 target_q = v_r + self.gamma * next_q
 
             current_q = self.model(v_s).gather(1, v_a)
